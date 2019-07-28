@@ -11,7 +11,13 @@ with open('README.rst') as readme_file:
 with open('HISTORY.rst') as history_file:
     history = history_file.read()
 
-requirements = [ ]
+requirements = [ 
+    'tf-nightly; platform_system=="Darwin"',
+    'tf-nightly-gpu; platform_system=="Linux"',
+    'tf-agents-nightly',
+    'gym',
+    'donkey_gym @ https://github.com/leigh-johnson/donkey_gym/archive/v0.1.0.tar.gz'
+ ]
 
 setup_requirements = ['pytest-runner', ]
 
