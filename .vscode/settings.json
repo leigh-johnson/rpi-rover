@@ -1,3 +1,4 @@
 {
-    "python.pythonPath": "/home/leigh/anaconda3/envs/donkey/bin/python"
+    "python.pythonPath": "venv/bin/python",
+    "restructuredtext.confPath": "${workspaceFolder}/conf.py"
 }

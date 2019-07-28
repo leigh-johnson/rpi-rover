@@ -20,7 +20,6 @@ from keras.layers.convolutional import Convolution2D, MaxPooling2D
 import tensorflow as tf
 from keras import backend as K
 
-import donkey_gym
 import my_cv
 
 EPISODES = 10000
