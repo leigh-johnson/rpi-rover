@@ -11,12 +11,15 @@ with open('README.rst') as readme_file:
 with open('HISTORY.rst') as history_file:
     history = history_file.read()
 
+PYTHON_VERSIONS = '>=3'
+
 requirements = [
     'tf-nightly; platform_system=="Darwin"',
     'tf-nightly-gpu; platform_system=="Linux"',
     'tf-agents-nightly',
     'gym',
-    'gym-donkeycar'
+    'gym-donkeycar',
+    'tf-agents'
 ]
 
 setup_requirements = ['pytest-runner', ]
@@ -39,6 +42,7 @@ setup(
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
     ],
+    python_requires=PYTHON_VERSIONS,
     description="Training a self-driving car using TensorFlow, Raspberry Pi, and Donkey Car",
     install_requires=requirements,
     license="MIT license",
