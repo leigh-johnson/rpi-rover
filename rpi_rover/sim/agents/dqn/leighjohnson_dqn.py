@@ -1,5 +1,28 @@
-# https://raw.githubusercontent.com/tensorflow/agents/master/tf_agents/agents/dqn/examples/v2/train_eval.py
-# coding=utf-8
+# Derived Work
+# MIT License
+
+# Copyright (c) 2019, Leigh Johnson
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+# Original Work
+# https://github.com/tensorflow/agents/blob/master/tf_agents/agents/dqn/examples/v2/train_eval.py
 # Copyright 2018 The TF-Agents Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,40 +37,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""Train and Eval DQN.
-
-To run DDQN on DonkeyCar Gym:
-
-```bash
-tensorboard --logdir $PROJECT_DIR/logs/ddqn/gym/DonkeyCar-v0/ --port 2223 &
-
-python tf_agents/agents/dqn/examples/v2/train_eval.py \
-  --root_dir=$HOME/tmp/dqn/gym/CartPole-v0/ \
-  --alsologtostderr
-```
-
-To run DQN-RNNs on MaskedCartPole:
-
-```bash
-python tf_agents/agents/dqn/examples/v2/train_eval.py \
-  --root_dir=$HOME/tmp/dqn_rnn/gym/MaskedCartPole-v0/ \
-  --gin_param='train_eval.env_name="DonkeyCar-v0"' \
-  --gin_param='train_eval.train_sequence_length=10' \
-  --alsologtostderr
-```
-
-"""
-
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
 import os
-import time
-
-from absl import app
-from absl import flags
-from absl import logging
+from collections import namedtuple
 
 import gin
 import tensorflow as tf
@@ -65,20 +60,21 @@ from tf_agents.policies import random_tf_policy
 from tf_agents.replay_buffers import tf_uniform_replay_buffer
 from tf_agents.utils import common
 
-flags.DEFINE_string('root_dir', os.getenv('TEST_UNDECLARED_OUTPUTS_DIR'),
-                    'Root directory for writing logs/summaries/checkpoints.')
-flags.DEFINE_integer('num_iterations', 100000,
-                     'Total number train/eval iterations to perform.')
-flags.DEFINE_multi_string('gin_file', None, 'Paths to the gin-config files.')
-flags.DEFINE_multi_string('gin_param', None, 'Gin binding parameters.')
 
-FLAGS = flags.FLAGS
+dirname = os.path.dirname(__file__)
+filename = os.path.join(dirname, 'relative/path/to/file/you/want')
 
 
 @gin.configurable
 def train_eval(
     root_dir,
     env_name='CartPole-v0',
+    # env_list = [
+    #    "donkey-warehouse-v0",
+    #    "donkey-generated-roads-v0",
+    #    "donkey-avc-sparkfun-v0",
+    #    "donkey-generated-track-v0"
+    # ]
     num_iterations=100000,
     train_sequence_length=1,
     # Params for QNetwork
@@ -119,21 +115,11 @@ def train_eval(
     debug_summaries=False,
     summarize_grads_and_vars=False,
         eval_metrics_callback=None):
-    """A simple train and eval for DQN."""
-    root_dir = os.path.expanduser(root_dir)
-    train_dir = os.path.join(root_dir, 'train')
-    eval_dir = os.path.join(root_dir, 'eval')
 
-    train_summary_writer = tf.compat.v2.summary.create_file_writer(
-        train_dir, flush_millis=summaries_flush_secs * 1000)
-    train_summary_writer.set_as_default()
+    dirs = setup_dirs(root_dir)
+    summary_writers = setup_writers(dirs, summaries_flush_secs)
 
-    eval_summary_writer = tf.compat.v2.summary.create_file_writer(
-        eval_dir, flush_millis=summaries_flush_secs * 1000)
-    eval_metrics = [
-        tf_metrics.AverageReturnMetric(buffer_size=num_eval_episodes),
-        tf_metrics.AverageEpisodeLengthMetric(buffer_size=num_eval_episodes)
-    ]
+    global_step = tf.compat.v1.train.get_or_create_global_step()
 
     global_step = tf.compat.v1.train.get_or_create_global_step()
     with tf.compat.v2.summary.record_if(
@@ -142,26 +128,8 @@ def train_eval(
         eval_tf_env = tf_py_environment.TFPyEnvironment(
             suite_gym.load(env_name))
 
-        if train_sequence_length != 1 and n_step_update != 1:
-            raise NotImplementedError(
-                'train_eval does not currently support n-step updates with stateful '
-                'networks (i.e., RNNs)')
+        qnet = setup_qnet(train_sequence_length, n_step_update)
 
-        if train_sequence_length > 1:
-            q_net = q_rnn_network.QRnnNetwork(
-                tf_env.observation_spec(),
-                tf_env.action_spec(),
-                input_fc_layer_params=input_fc_layer_params,
-                lstm_size=lstm_size,
-                output_fc_layer_params=output_fc_layer_params)
-        else:
-            q_net = q_network.QNetwork(
-                tf_env.observation_spec(),
-                tf_env.action_spec(),
-                fc_layer_params=fc_layer_params)
-            train_sequence_length = n_step_update
-
-        # TODO(b/127301657): Decay epsilon based on global step, cf. cl/188907839
         tf_agent = dqn_agent.DqnAgent(
             tf_env.time_step_spec(),
             tf_env.action_spec(),
@@ -172,7 +140,7 @@ def train_eval(
             target_update_period=target_update_period,
             optimizer=tf.compat.v1.train.AdamOptimizer(
                 learning_rate=learning_rate),
-            td_errors_loss_fn=dqn_agent.element_wise_squared_loss,
+            td_errors_loss_fn=common.element_wise_squared_loss,
             gamma=gamma,
             reward_scale_factor=reward_scale_factor,
             gradient_clipping=gradient_clipping,
@@ -181,12 +149,7 @@ def train_eval(
             train_step_counter=global_step)
         tf_agent.initialize()
 
-        train_metrics = [
-            tf_metrics.NumberOfEpisodes(),
-            tf_metrics.EnvironmentSteps(),
-            tf_metrics.AverageReturnMetric(),
-            tf_metrics.AverageEpisodeLengthMetric(),
-        ]
+        metrics = setup_metrics()
 
         eval_policy = tf_agent.policy
         collect_policy = tf_agent.collect_policy
@@ -199,46 +162,29 @@ def train_eval(
         collect_driver = dynamic_step_driver.DynamicStepDriver(
             tf_env,
             collect_policy,
-            observers=[replay_buffer.add_batch] + train_metrics,
+            observers=[replay_buffer.add_batch] + metrics.train,
             num_steps=collect_steps_per_iteration)
 
-        train_checkpointer = common.Checkpointer(
-            ckpt_dir=train_dir,
-            agent=tf_agent,
-            global_step=global_step,
-            metrics=metric_utils.MetricsGroup(train_metrics, 'train_metrics'))
-        policy_checkpointer = common.Checkpointer(
-            ckpt_dir=os.path.join(train_dir, 'policy'),
-            policy=eval_policy,
-            global_step=global_step)
-        rb_checkpointer = common.Checkpointer(
-            ckpt_dir=os.path.join(train_dir, 'replay_buffer'),
-            max_to_keep=1,
-            replay_buffer=replay_buffer)
-
-        train_checkpointer.initialize_or_restore()
-        rb_checkpointer.initialize_or_restore()
-
+        checkpointers = setup_checkpointers(
+            dirs.train, tf_agent, global_step, eval_policy, replay_buffer)
         if use_tf_functions:
             # To speed up collect use common.function.
             collect_driver.run = common.function(collect_driver.run)
             tf_agent.train = common.function(tf_agent.train)
 
-        initial_collect_policy = random_tf_policy.RandomTFPolicy(
-            tf_env.time_step_spec(), tf_env.action_spec())
-
-        # Collect initial replay data.
         logging.info(
             'Initializing replay buffer by collecting experience for %d steps with '
             'a random policy.', initial_collect_steps)
+        initial_collect_policy = random_tf_policy.RandomTFPolicy(
+            tf_env.time_step_spec(), tf_env.action_spec())
         dynamic_step_driver.DynamicStepDriver(
             tf_env,
             initial_collect_policy,
-            observers=[replay_buffer.add_batch] + train_metrics,
+            observers=[replay_buffer.add_batch] + metrics.train,
             num_steps=initial_collect_steps).run()
 
         results = metric_utils.eager_compute(
-            eval_metrics,
+            metric..eval,
             eval_tf_env,
             eval_policy,
             num_episodes=num_eval_episodes,
@@ -249,14 +195,12 @@ def train_eval(
         if eval_metrics_callback is not None:
             eval_metrics_callback(results, global_step.numpy())
         metric_utils.log_metrics(eval_metrics)
-
         time_step = None
         policy_state = collect_policy.get_initial_state(tf_env.batch_size)
 
         timed_at_step = global_step.numpy()
         time_acc = 0
 
-        # Dataset generates trajectories with shape [Bx2x...]
         dataset = replay_buffer.as_dataset(
             num_parallel_calls=3,
             sample_batch_size=batch_size,
@@ -320,13 +264,97 @@ def train_eval(
         return train_loss
 
 
-def main(_):
-    logging.set_verbosity(logging.INFO)
-    tf.compat.v1.enable_v2_behavior()
-    gin.parse_config_files_and_bindings(FLAGS.gin_file, FLAGS.gin_param)
-    train_eval(FLAGS.root_dir, num_iterations=FLAGS.num_iterations)
+def setup_checkpointers(train_dir, tf_agent, global_step, eval_policy, replay_buffer):
+
+    checkpointers = namedtuple(
+        'checkpointers', ['train', 'policy', 'replay_buffer'])
+
+    train_checkpointer = common.Checkpointer(
+        ckpt_dir=train_dir,
+        agent=tf_agent,
+        global_step=global_step,
+        metrics=metric_utils.MetricsGroup(train_metrics, 'train_metrics'))
+    policy_checkpointer = common.Checkpointer(
+        ckpt_dir=os.path.join(train_dir, 'policy'),
+        policy=eval_policy,
+        global_step=global_step)
+    rb_checkpointer = common.Checkpointer(
+        ckpt_dir=os.path.join(train_dir, 'replay_buffer'),
+        max_to_keep=1,
+        replay_buffer=replay_buffer)
+    return checkpointers(train_checkpointer, policy_checkpointer, rb_checkpointer)
+
+
+def setup_metrics(num_eval_episodes):
+    metrics = namedtuple('metrics', ['train', 'eval'])
+
+    eval_metrics = [
+        tf_metrics.AverageReturnMetric(buffer_size=num_eval_episodes),
+        tf_metrics.AverageEpisodeLengthMetric(buffer_size=num_eval_episodes)
+    ]
+    train_metrics = [
+        tf_metrics.NumberOfEpisodes(),
+        tf_metrics.EnvironmentSteps(),
+        tf_metrics.AverageReturnMetric(),
+        tf_metrics.AverageEpisodeLengthMetric(),
+    ]
+
+    return metrics(train_metrics, eval_metrics)
+
+
+def setup_qnet(train_sequence_length, n_step_update):
+    if train_sequence_length != 1 and n_step_update != 1:
+        raise NotImplementedError(
+            'train_eval does not currently support n-step updates with stateful '
+            'networks (i.e., RNNs)')
+    if train_sequence_length > 1:
+        q_net = q_rnn_network.QRnnNetwork(
+            tf_env.observation_spec(),
+            tf_env.action_spec(),
+            input_fc_layer_params=input_fc_layer_params,
+            lstm_size=lstm_size,
+            output_fc_layer_params=output_fc_layer_params)
+    else:
+        q_net = q_network.QNetwork(
+            tf_env.observation_spec(),
+            tf_env.action_spec(),
+            fc_layer_params=fc_layer_params)
+    return qnet
+
+
+def setup_summary_writers(dirs, summerize_flush_secs):
+    writers = namedtuple('summary_writers', ['train', 'eval'])
+    train_summary_writer = tf.compat.v2.summary.create_file_writer(
+        dirs.train, flush_millis=summaries_flush_secs * 1000)
+    train_summary_writer.set_as_default()
+
+    eval_summary_writer = tf.compat.v2.summary.create_file_writer(
+        dirs.eval, flush_millis=summaries_flush_secs * 1000)
+
+    return writers(train_summary_writer, eval_summary_writer)
+
+
+def setup_dirs(root_dir):
+    dirs = namedtuple('dirs', ['root', 'train', 'eval'])
+    root_dir = os.path.expanduser(root_dir)
+    train_dir = os.path.join(root_dir, 'train')
+    eval_dir = os.path.join(root_dir, 'eval')
+
+    return dirs(root_dir, train_dir, eval_dir)
+
+    return train_summary_writer, eval_summary_writer
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--gin-file', default=None)
+    parser.add_argument('--dir', required=True)
+
+    return parser.parse_args()
 
 
 if __name__ == '__main__':
-    flags.mark_flag_as_required('root_dir')
-    app.run(main)
+
+    args = parse_args()
+    print(args)

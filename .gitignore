@@ -104,3 +104,5 @@ ENV/
 
 .vscode/settings.json
 unitylog.txt
+.tmp/
+tmp/
