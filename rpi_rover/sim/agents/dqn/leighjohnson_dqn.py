@@ -22,7 +22,7 @@
 # SOFTWARE.
 
 # Original Work
-# https://github.com/tensorflow/agents/blob/master/tf_agents/agents/dqn/examples/v2/train_eval.py
+# https://github.com/tensorflow/agents/blob/master/tf_agents/agents/dqn/examples/v2/setup_summary_writers.py
 # Copyright 2018 The TF-Agents Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,6 +43,9 @@ from __future__ import print_function
 
 import os
 from collections import namedtuple
+import argparse
+import logging
+import time
 
 import gin
 import tensorflow as tf
@@ -63,6 +66,9 @@ from tf_agents.utils import common
 
 dirname = os.path.dirname(__file__)
 filename = os.path.join(dirname, 'relative/path/to/file/you/want')
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 @gin.configurable
@@ -117,7 +123,7 @@ def train_eval(
         eval_metrics_callback=None):
 
     dirs = setup_dirs(root_dir)
-    summary_writers = setup_writers(dirs, summaries_flush_secs)
+    summary_writers = setup_summary_writers(dirs, summaries_flush_secs)
 
     global_step = tf.compat.v1.train.get_or_create_global_step()
 
@@ -128,7 +134,8 @@ def train_eval(
         eval_tf_env = tf_py_environment.TFPyEnvironment(
             suite_gym.load(env_name))
 
-        qnet = setup_qnet(train_sequence_length, n_step_update)
+        q_net = setup_qnet(train_sequence_length, n_step_update,
+                           tf_env, fc_layer_params, input_fc_layer_params, output_fc_layer_params)
 
         tf_agent = dqn_agent.DqnAgent(
             tf_env.time_step_spec(),
@@ -149,7 +156,7 @@ def train_eval(
             train_step_counter=global_step)
         tf_agent.initialize()
 
-        metrics = setup_metrics()
+        metrics = setup_metrics(num_eval_episodes)
 
         eval_policy = tf_agent.policy
         collect_policy = tf_agent.collect_policy
@@ -166,13 +173,13 @@ def train_eval(
             num_steps=collect_steps_per_iteration)
 
         checkpointers = setup_checkpointers(
-            dirs.train, tf_agent, global_step, eval_policy, replay_buffer)
+            dirs.train, tf_agent, global_step, eval_policy, replay_buffer, metrics.train)
         if use_tf_functions:
             # To speed up collect use common.function.
             collect_driver.run = common.function(collect_driver.run)
             tf_agent.train = common.function(tf_agent.train)
 
-        logging.info(
+        logger.info(
             'Initializing replay buffer by collecting experience for %d steps with '
             'a random policy.', initial_collect_steps)
         initial_collect_policy = random_tf_policy.RandomTFPolicy(
@@ -184,17 +191,17 @@ def train_eval(
             num_steps=initial_collect_steps).run()
 
         results = metric_utils.eager_compute(
-            metric..eval,
+            metrics.eval,
             eval_tf_env,
             eval_policy,
             num_episodes=num_eval_episodes,
             train_step=global_step,
-            summary_writer=eval_summary_writer,
+            summary_writer=summary_writers.eval,
             summary_prefix='Metrics',
         )
         if eval_metrics_callback is not None:
             eval_metrics_callback(results, global_step.numpy())
-        metric_utils.log_metrics(eval_metrics)
+        metric_utils.log_metrics(metrics.eval)
         time_step = None
         policy_state = collect_policy.get_initial_state(tf_env.batch_size)
 
@@ -225,46 +232,48 @@ def train_eval(
             time_acc += time.time() - start_time
 
             if global_step.numpy() % log_interval == 0:
-                logging.info('step = %d, loss = %f', global_step.numpy(),
-                             train_loss.loss)
+                logger.info('step = %d, loss = %f', global_step.numpy(),
+                            train_loss.loss)
                 steps_per_sec = (global_step.numpy() -
                                  timed_at_step) / time_acc
-                logging.info('%.3f steps/sec', steps_per_sec)
+                logger.info('%.3f steps/sec', steps_per_sec)
                 tf.compat.v2.summary.scalar(
                     name='global_steps_per_sec', data=steps_per_sec, step=global_step)
                 timed_at_step = global_step.numpy()
                 time_acc = 0
 
-            for train_metric in train_metrics:
+            for train_metric in metrics.train:
                 train_metric.tf_summaries(
-                    train_step=global_step, step_metrics=train_metrics[:2])
+                    train_step=global_step, step_metrics=metrics.train[:2])
 
             if global_step.numpy() % train_checkpoint_interval == 0:
-                train_checkpointer.save(global_step=global_step.numpy())
+                checkpointers.train.save(global_step=global_step.numpy())
 
             if global_step.numpy() % policy_checkpoint_interval == 0:
-                policy_checkpointer.save(global_step=global_step.numpy())
+                checkpointers.policy.save(global_step=global_step.numpy())
 
             if global_step.numpy() % rb_checkpoint_interval == 0:
-                rb_checkpointer.save(global_step=global_step.numpy())
+                checkpointers.replay_buffer.save(
+                    global_step=global_step.numpy())
 
             if global_step.numpy() % eval_interval == 0:
                 results = metric_utils.eager_compute(
-                    eval_metrics,
+                    metrics.eval,
                     eval_tf_env,
                     eval_policy,
                     num_episodes=num_eval_episodes,
                     train_step=global_step,
-                    summary_writer=eval_summary_writer,
+                    summary_writer=summary_writers.eval,
                     summary_prefix='Metrics',
                 )
                 if eval_metrics_callback is not None:
                     eval_metrics_callback(results, global_step.numpy())
-                metric_utils.log_metrics(eval_metrics)
+                metric_utils.log_metrics(metrics.eval)
+        logger.info(f'train_loss {train_loss}')
         return train_loss
 
 
-def setup_checkpointers(train_dir, tf_agent, global_step, eval_policy, replay_buffer):
+def setup_checkpointers(train_dir, tf_agent, global_step, eval_policy, replay_buffer, train_metrics):
 
     checkpointers = namedtuple(
         'checkpointers', ['train', 'policy', 'replay_buffer'])
@@ -302,10 +311,10 @@ def setup_metrics(num_eval_episodes):
     return metrics(train_metrics, eval_metrics)
 
 
-def setup_qnet(train_sequence_length, n_step_update):
+def setup_qnet(train_sequence_length, n_step_update, tf_env, fc_layer_params, input_fc_layer_params, output_fc_layer_params):
     if train_sequence_length != 1 and n_step_update != 1:
         raise NotImplementedError(
-            'train_eval does not currently support n-step updates with stateful '
+            'setup_summary_writers does not currently support n-step updates with stateful '
             'networks (i.e., RNNs)')
     if train_sequence_length > 1:
         q_net = q_rnn_network.QRnnNetwork(
@@ -319,19 +328,19 @@ def setup_qnet(train_sequence_length, n_step_update):
             tf_env.observation_spec(),
             tf_env.action_spec(),
             fc_layer_params=fc_layer_params)
-    return qnet
+    return q_net
 
 
-def setup_summary_writers(dirs, summerize_flush_secs):
+def setup_summary_writers(dirs, summaries_flush_secs):
     writers = namedtuple('summary_writers', ['train', 'eval'])
     train_summary_writer = tf.compat.v2.summary.create_file_writer(
         dirs.train, flush_millis=summaries_flush_secs * 1000)
     train_summary_writer.set_as_default()
 
-    eval_summary_writer = tf.compat.v2.summary.create_file_writer(
+    summary_writers_eval = tf.compat.v2.summary.create_file_writer(
         dirs.eval, flush_millis=summaries_flush_secs * 1000)
 
-    return writers(train_summary_writer, eval_summary_writer)
+    return writers(train_summary_writer, summary_writers_eval)
 
 
 def setup_dirs(root_dir):
@@ -341,8 +350,6 @@ def setup_dirs(root_dir):
     eval_dir = os.path.join(root_dir, 'eval')
 
     return dirs(root_dir, train_dir, eval_dir)
-
-    return train_summary_writer, eval_summary_writer
 
 
 def parse_args():
@@ -355,6 +362,7 @@ def parse_args():
 
 
 if __name__ == '__main__':
-
+    tf.compat.v1.enable_v2_behavior()
     args = parse_args()
-    print(args)
+    gin.parse_config_files_and_bindings(args.gin_file, None)
+    train_eval(args.dir)
