@@ -1,8 +1,7 @@
-# Derived Work
+
+# Modified Work Copyright (c) 2019, Leigh Johnson
+# 
 # MIT License
-
-# Copyright (c) 2019, Leigh Johnson
-
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
 # in the Software without restriction, including without limitation the rights
@@ -21,10 +20,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-# Original Work
+# Original Work Copyright 2018 The TF-Agents Authors.
 # https://github.com/tensorflow/agents/blob/master/tf_agents/agents/dqn/examples/v2/setup_summary_writers.py
-# Copyright 2018 The TF-Agents Authors.
-#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -63,9 +60,9 @@ from tf_agents.policies import random_tf_policy
 from tf_agents.replay_buffers import tf_uniform_replay_buffer
 from tf_agents.utils import common
 
+from gym_donkeycar import envs as gym_donkeycar_envs
+from rpi_rover.sim.config import DONKEY_SIM_PATH
 
-dirname = os.path.dirname(__file__)
-filename = os.path.join(dirname, 'relative/path/to/file/you/want')
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -74,14 +71,15 @@ logger.setLevel(logging.INFO)
 @gin.configurable
 def train_eval(
     root_dir,
-    env_name='CartPole-v0',
+    env_name='donkey-generated-track-v0',
     # env_list = [
     #    "donkey-warehouse-v0",
     #    "donkey-generated-roads-v0",
     #    "donkey-avc-sparkfun-v0",
     #    "donkey-generated-track-v0"
     # ]
-    num_iterations=100000,
+    num_iterations=10000,
+    max_episode_steps=10000,
     train_sequence_length=1,
     # Params for QNetwork
     fc_layer_params=(100,),
@@ -94,7 +92,7 @@ def train_eval(
     initial_collect_steps=1000,
     collect_steps_per_iteration=1,
     epsilon_greedy=0.1,
-    replay_buffer_capacity=100000,
+    replay_buffer_capacity=1000,
     # Params for target update
     target_update_tau=0.05,
     target_update_period=5,
@@ -130,12 +128,14 @@ def train_eval(
     global_step = tf.compat.v1.train.get_or_create_global_step()
     with tf.compat.v2.summary.record_if(
             lambda: tf.math.equal(global_step % summary_interval, 0)):
-        tf_env = tf_py_environment.TFPyEnvironment(suite_gym.load(env_name))
+        
+        tf_env = tf_py_environment.TFPyEnvironment(suite_gym.load(env_name, max_episode_steps=max_episode_steps))
+        
         eval_tf_env = tf_py_environment.TFPyEnvironment(
-            suite_gym.load(env_name))
+            suite_gym.load(env_name, max_episode_steps=max_episode_steps))
 
         q_net = setup_qnet(train_sequence_length, n_step_update,
-                           tf_env, fc_layer_params, input_fc_layer_params, output_fc_layer_params)
+                           tf_env, fc_layer_params, input_fc_layer_params, output_fc_layer_params, lstm_size)
 
         tf_agent = dqn_agent.DqnAgent(
             tf_env.time_step_spec(),
@@ -189,6 +189,7 @@ def train_eval(
             initial_collect_policy,
             observers=[replay_buffer.add_batch] + metrics.train,
             num_steps=initial_collect_steps).run()
+        
 
         results = metric_utils.eager_compute(
             metrics.eval,
@@ -311,7 +312,7 @@ def setup_metrics(num_eval_episodes):
     return metrics(train_metrics, eval_metrics)
 
 
-def setup_qnet(train_sequence_length, n_step_update, tf_env, fc_layer_params, input_fc_layer_params, output_fc_layer_params):
+def setup_qnet(train_sequence_length, n_step_update, tf_env, fc_layer_params, input_fc_layer_params, output_fc_layer_params, lstm_size):
     if train_sequence_length != 1 and n_step_update != 1:
         raise NotImplementedError(
             'setup_summary_writers does not currently support n-step updates with stateful '
@@ -357,12 +358,23 @@ def parse_args():
 
     parser.add_argument('--gin-file', default=None)
     parser.add_argument('--dir', required=True)
+    parser.add_argument('--sim', type=str, default=DONKEY_SIM_PATH, help='path to unity simulator. maybe be left at manual if you would like to start the sim on your own.')
+    parser.add_argument('--headless', type=int, default=1, help='1 to supress graphics')
+    parser.add_argument('--port', type=int, default=9091, help='port to use for websockets')
+
 
     return parser.parse_args()
 
 
 if __name__ == '__main__':
+
     tf.compat.v1.enable_v2_behavior()
     args = parse_args()
+    #we pass arguments to the donkey_gym init via these
+    os.environ['DONKEY_SIM_PATH'] = args.sim
+    os.environ['DONKEY_SIM_PORT'] = str(args.port)
+    #os.environ['DONKEY_SIM_HEADLESS'] = str(args.headless)
+    os.environ['DONKEY_SIM_MULTI'] = '1'
+
     gin.parse_config_files_and_bindings(args.gin_file, None)
     train_eval(args.dir)

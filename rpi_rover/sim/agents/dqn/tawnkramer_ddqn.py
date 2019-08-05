@@ -33,7 +33,7 @@ from tensorflow.keras.layers import Conv2D, MaxPooling2D
 import tensorflow as tf
 from tensorflow.keras import backend as K
 
-import donkey_gym
+from gym_donkeycar import envs
 
 # app
 

@@ -14,12 +14,11 @@ with open('HISTORY.rst') as history_file:
 PYTHON_VERSIONS = '>=3'
 
 requirements = [
-    'tf-nightly; platform_system=="Darwin"',
-    'tf-nightly-gpu; platform_system=="Linux"',
+    'tf-nightly-2.0-preview; platform_system=="Darwin"',
+    'tf-nightly-gpu-2.0-preview; platform_system=="Linux"',
     'tf-agents-nightly',
     'gym',
     'gym-donkeycar',
-    'tf-agents'
 ]
 
 setup_requirements = ['pytest-runner', ]

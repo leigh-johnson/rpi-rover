@@ -268,7 +268,8 @@ def train_eval(
 
         if use_tf_functions:
             train_step = common.function(train_step)
-
+        
+        logging.info('Done with initial seed. Beginning training')
         for _ in range(num_iterations):
             start_time = time.time()
             time_step, policy_state = collect_driver.run(
