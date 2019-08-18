@@ -52,6 +52,8 @@ from tf_agents.drivers import dynamic_step_driver
 from tf_agents.environments import suite_gym
 from tf_agents.environments import tf_py_environment
 from tf_agents.environments.examples import masked_cartpole  # pylint: disable=unused-import
+from tf_agents.environments.wrappers import MultiDiscreteToDiscreteWrapper
+
 from tf_agents.eval import metric_utils
 from tf_agents.metrics import tf_metrics
 from tf_agents.networks import q_network
@@ -59,9 +61,15 @@ from tf_agents.networks import q_rnn_network
 from tf_agents.policies import random_tf_policy
 from tf_agents.replay_buffers import tf_uniform_replay_buffer
 from tf_agents.utils import common
+from gym.envs.registration import register
+
+register(id='headless-donkey-generated-track-multidiscrete-v0', entry_point='gym_donkeycar.envs.donkey_env:MultiDiscreteGeneratedTrackEnv',
+    kwargs={'headless': True}
+)
 
 from gym_donkeycar import envs as gym_donkeycar_envs
 from rpi_rover.sim.config import DONKEY_SIM_PATH
+
 
 
 logger = logging.getLogger(__name__)
@@ -71,7 +79,7 @@ logger.setLevel(logging.INFO)
 @gin.configurable
 def train_eval(
     root_dir,
-    env_name='donkey-generated-track-v0',
+    env_name='donkey-generated-track-multidiscrete-v0',
     # env_list = [
     #    "donkey-warehouse-v0",
     #    "donkey-generated-roads-v0",
@@ -92,7 +100,7 @@ def train_eval(
     initial_collect_steps=1000,
     collect_steps_per_iteration=1,
     epsilon_greedy=0.1,
-    replay_buffer_capacity=1000,
+    replay_buffer_capacity=10000,
     # Params for target update
     target_update_tau=0.05,
     target_update_period=5,
@@ -129,11 +137,19 @@ def train_eval(
     with tf.compat.v2.summary.record_if(
             lambda: tf.math.equal(global_step % summary_interval, 0)):
         
-        tf_env = tf_py_environment.TFPyEnvironment(suite_gym.load(env_name, max_episode_steps=max_episode_steps))
-        
-        eval_tf_env = tf_py_environment.TFPyEnvironment(
-            suite_gym.load(env_name, max_episode_steps=max_episode_steps))
+        tf_env = tf_py_environment.TFPyEnvironment(suite_gym.load(env_name, max_episode_steps=max_episode_steps,
+            env_wrappers=(MultiDiscreteToDiscreteWrapper,)
+        ))
+        #tf_env = MultiDiscreteToDiscreteWrapper(tf_env)
 
+        #import pdb; pdb.set_trace()
+
+        eval_tf_env = tf_py_environment.TFPyEnvironment(
+            suite_gym.load('headless-' + env_name, max_episode_steps=max_episode_steps,
+            env_wrappers=(MultiDiscreteToDiscreteWrapper,)
+            ))
+        
+        #eval_tf_env = MultiDiscreteToDiscreteWrapper(eval_tf_env)
         q_net = setup_qnet(train_sequence_length, n_step_update,
                            tf_env, fc_layer_params, input_fc_layer_params, output_fc_layer_params, lstm_size)
 
@@ -179,11 +195,15 @@ def train_eval(
             collect_driver.run = common.function(collect_driver.run)
             tf_agent.train = common.function(tf_agent.train)
 
-        logger.info(
-            'Initializing replay buffer by collecting experience for %d steps with '
-            'a random policy.', initial_collect_steps)
+        logger.info('Init a random action policy')
         initial_collect_policy = random_tf_policy.RandomTFPolicy(
             tf_env.time_step_spec(), tf_env.action_spec())
+        
+
+        logger.info(
+            'Initialize replay buffer by collecting experience for %d steps with '
+            'a random policy.', initial_collect_steps)
+
         dynamic_step_driver.DynamicStepDriver(
             tf_env,
             initial_collect_policy,
@@ -209,6 +229,7 @@ def train_eval(
         timed_at_step = global_step.numpy()
         time_acc = 0
 
+        logger.info('Loading replay_buffer into generator')
         dataset = replay_buffer.as_dataset(
             num_parallel_calls=3,
             sample_batch_size=batch_size,
@@ -294,7 +315,7 @@ def setup_checkpointers(train_dir, tf_agent, global_step, eval_policy, replay_bu
         replay_buffer=replay_buffer)
     return checkpointers(train_checkpointer, policy_checkpointer, rb_checkpointer)
 
-
+dynamic_step_driver
 def setup_metrics(num_eval_episodes):
     metrics = namedtuple('metrics', ['train', 'eval'])
 
