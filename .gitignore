@@ -106,3 +106,4 @@ ENV/
 unitylog.txt
 .tmp/
 tmp/
+logs/
