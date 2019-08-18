@@ -50,6 +50,7 @@ setup(
     keywords='rpi_rover',
     name='rpi_rover',
     packages=find_packages(include=['rpi_rover']),
+    dependency_links=['git+ssh://git@github.com/leigh-johnson/agents.git@multidiscrete-testing#egg=tf-agents-nightly-0.2.0.dev20190816'],
     setup_requires=setup_requirements,
     test_suite='tests',
     tests_require=test_requirements,
