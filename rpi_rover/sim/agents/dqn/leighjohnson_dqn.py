@@ -42,7 +42,9 @@ import os
 from collections import namedtuple
 import argparse
 import logging
+from logging.config import fileConfig
 import time
+from multiprocessing import Process
 
 import gin
 import tensorflow as tf
@@ -63,18 +65,20 @@ from tf_agents.replay_buffers import tf_uniform_replay_buffer
 from tf_agents.utils import common
 from gym.envs.registration import register
 
-register(id='headless-donkey-generated-track-multidiscrete-v0', entry_point='gym_donkeycar.envs.donkey_env:MultiDiscreteGeneratedTrackEnv',
-    kwargs={'headless': True}
+THREAD_MAP = {}
+register(id='train-donkey-generated-track-multidiscrete-v0', entry_point='gym_donkeycar.envs.donkey_env:MultiDiscreteGeneratedTrackEnv',
+    kwargs={'headless': False, 'thread_name': 'train', 'dispatcher_map': THREAD_MAP, 'thread_name': 'TrainSimThread'}
+)
+
+register(id='eval-donkey-generated-track-multidiscrete-v0', entry_point='gym_donkeycar.envs.donkey_env:MultiDiscreteGeneratedTrackEnv',
+    kwargs={'headless': False, 'thread_name': 'eval',  'dispatcher_map': THREAD_MAP, 'thread_name': 'EvalSimThread'}
 )
 
 from gym_donkeycar import envs as gym_donkeycar_envs
 from rpi_rover.sim.config import DONKEY_SIM_PATH
 
-
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
+fileConfig('logging.ini')
+logger = logging.getLogger()
 
 @gin.configurable
 def train_eval(
@@ -86,7 +90,7 @@ def train_eval(
     #    "donkey-avc-sparkfun-v0",
     #    "donkey-generated-track-v0"
     # ]
-    num_iterations=10000,
+    num_iterations=100,
     max_episode_steps=10000,
     train_sequence_length=1,
     # Params for QNetwork
@@ -97,10 +101,10 @@ def train_eval(
     output_fc_layer_params=(20,),
 
     # Params for collect
-    initial_collect_steps=1000,
+    initial_collect_steps=100,
     collect_steps_per_iteration=1,
     epsilon_greedy=0.1,
-    replay_buffer_capacity=10000,
+    replay_buffer_capacity=100000,
     # Params for target update
     target_update_tau=0.05,
     target_update_period=5,
@@ -121,7 +125,7 @@ def train_eval(
     policy_checkpoint_interval=5000,
     rb_checkpoint_interval=20000,
     # Params for summaries and logging
-    log_interval=1000,
+    log_interval=10,
     summary_interval=1000,
     summaries_flush_secs=10,
     debug_summaries=False,
@@ -137,17 +141,21 @@ def train_eval(
     with tf.compat.v2.summary.record_if(
             lambda: tf.math.equal(global_step % summary_interval, 0)):
         
-        tf_env = tf_py_environment.TFPyEnvironment(suite_gym.load(env_name, max_episode_steps=max_episode_steps,
+        tf_env = tf_py_environment.TFPyEnvironment(suite_gym.load(f'train-{env_name}', max_episode_steps=max_episode_steps,
             env_wrappers=(MultiDiscreteToDiscreteWrapper,)
         ))
+        logging.info('Initialize tf_eval_env')
+
+
         #tf_env = MultiDiscreteToDiscreteWrapper(tf_env)
 
         #import pdb; pdb.set_trace()
 
-        eval_tf_env = tf_py_environment.TFPyEnvironment(
-            suite_gym.load('headless-' + env_name, max_episode_steps=max_episode_steps,
-            env_wrappers=(MultiDiscreteToDiscreteWrapper,)
-            ))
+        # eval_tf_env = tf_py_environment.TFPyEnvironment(
+        #     suite_gym.load('headless-' + env_name, max_episode_steps=max_episode_steps,
+        #     env_wrappers=(MultiDiscreteToDiscreteWrapper,)
+        #     ))
+
         
         #eval_tf_env = MultiDiscreteToDiscreteWrapper(eval_tf_env)
         q_net = setup_qnet(train_sequence_length, n_step_update,
@@ -195,12 +203,12 @@ def train_eval(
             collect_driver.run = common.function(collect_driver.run)
             tf_agent.train = common.function(tf_agent.train)
 
-        logger.info('Init a random action policy')
+        logging.info('Init a random action policy')
         initial_collect_policy = random_tf_policy.RandomTFPolicy(
             tf_env.time_step_spec(), tf_env.action_spec())
         
 
-        logger.info(
+        logging.info(
             'Initialize replay buffer by collecting experience for %d steps with '
             'a random policy.', initial_collect_steps)
 
@@ -210,7 +218,13 @@ def train_eval(
             observers=[replay_buffer.add_batch] + metrics.train,
             num_steps=initial_collect_steps).run()
         
+        logger.info('Initialized replay buffer. Resetting environment')
+        tf_env.reset()
+        logger.info('Initialize eval environment for metrics collection')
 
+        eval_tf_env = tf_py_environment.TFPyEnvironment(suite_gym.load(f'eval-{env_name}', max_episode_steps=max_episode_steps,
+            env_wrappers=(MultiDiscreteToDiscreteWrapper,)
+        ))
         results = metric_utils.eager_compute(
             metrics.eval,
             eval_tf_env,
@@ -220,6 +234,9 @@ def train_eval(
             summary_writer=summary_writers.eval,
             summary_prefix='Metrics',
         )
+
+        logging.info('Done initializing metric')
+
         if eval_metrics_callback is not None:
             eval_metrics_callback(results, global_step.numpy())
         metric_utils.log_metrics(metrics.eval)
@@ -229,7 +246,7 @@ def train_eval(
         timed_at_step = global_step.numpy()
         time_acc = 0
 
-        logger.info('Loading replay_buffer into generator')
+        logging.info('Loading replay_buffer into generator')
         dataset = replay_buffer.as_dataset(
             num_parallel_calls=3,
             sample_batch_size=batch_size,
@@ -254,11 +271,11 @@ def train_eval(
             time_acc += time.time() - start_time
 
             if global_step.numpy() % log_interval == 0:
-                logger.info('step = %d, loss = %f', global_step.numpy(),
+                logging.info('step = %d, loss = %f', global_step.numpy(),
                             train_loss.loss)
                 steps_per_sec = (global_step.numpy() -
                                  timed_at_step) / time_acc
-                logger.info('%.3f steps/sec', steps_per_sec)
+                logging.info('%.3f steps/sec', steps_per_sec)
                 tf.compat.v2.summary.scalar(
                     name='global_steps_per_sec', data=steps_per_sec, step=global_step)
                 timed_at_step = global_step.numpy()
@@ -279,6 +296,7 @@ def train_eval(
                     global_step=global_step.numpy())
 
             if global_step.numpy() % eval_interval == 0:
+
                 results = metric_utils.eager_compute(
                     metrics.eval,
                     eval_tf_env,
@@ -291,7 +309,10 @@ def train_eval(
                 if eval_metrics_callback is not None:
                     eval_metrics_callback(results, global_step.numpy())
                 metric_utils.log_metrics(metrics.eval)
-        logger.info(f'train_loss {train_loss}')
+            #logging.info(f'train_loss {train_loss}')
+
+        tf_env.pyenv.close()
+        eval_tf_env.pyenv.close()
         return train_loss
 
 
@@ -315,7 +336,6 @@ def setup_checkpointers(train_dir, tf_agent, global_step, eval_policy, replay_bu
         replay_buffer=replay_buffer)
     return checkpointers(train_checkpointer, policy_checkpointer, rb_checkpointer)
 
-dynamic_step_driver
 def setup_metrics(num_eval_episodes):
     metrics = namedtuple('metrics', ['train', 'eval'])
 
