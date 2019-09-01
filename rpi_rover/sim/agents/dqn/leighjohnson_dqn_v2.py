@@ -43,6 +43,7 @@ from __future__ import print_function
 
 import os
 import time
+import sys
 
 from absl import app
 from absl import flags
@@ -54,7 +55,7 @@ import gin
 import tensorflow as tf
 
 from tf_agents.agents.dqn import dqn_agent
-from tf_agents.drivers import dynamic_step_driver
+from tf_agents.drivers import dynamic_step_driver, dynamic_episode_driver
 from tf_agents.environments import suite_gym
 from tf_agents.environments import tf_py_environment
 from tf_agents.environments.examples import masked_cartpole  # pylint: disable=unused-import
@@ -89,9 +90,10 @@ register(id='eval-donkey-generated-track-multidiscrete-v0', entry_point='gym_don
 from gym_donkeycar import envs as gym_donkeycar_envs
 from rpi_rover.sim.config import DONKEY_SIM_PATH
 
-logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
 #fileConfig('logging.ini')
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
 
 
 @gin.configurable
@@ -108,8 +110,8 @@ def train_eval(
     output_fc_layer_params=(20,),
 
     # Params for collect
-    initial_collect_steps=100,
-    collect_steps_per_iteration=1,
+    initial_collect_episodes=10,
+    collect_episodes_per_iteration=10,
     epsilon_greedy=0.1,
     replay_buffer_capacity=10000,
     # Params for target update
@@ -127,14 +129,14 @@ def train_eval(
     use_tf_functions=True,
     # Params for eval
     num_eval_episodes=10,
-    eval_interval=1,
+    eval_interval=10,
     # Params for checkpoints
     train_checkpoint_interval=20,
     policy_checkpoint_interval=20,
     rb_checkpoint_interval=20,
     # Params for summaries and logging
-    log_interval=10,
-    summary_interval=10,
+    log_interval=1,
+    summary_interval=1,
     summaries_flush_secs=10,
     debug_summaries=True,
     summarize_grads_and_vars=True,
@@ -220,11 +222,12 @@ def train_eval(
             batch_size=tf_env.batch_size,
             max_length=replay_buffer_capacity)
 
-        collect_driver = dynamic_step_driver.DynamicStepDriver(
+        collect_driver = dynamic_episode_driver.DynamicEpisodeDriver(
             tf_env,
             collect_policy,
             observers=[replay_buffer.add_batch] + train_metrics,
-            num_steps=collect_steps_per_iteration)
+            num_episodes=collect_episodes_per_iteration
+        )
 
         train_checkpointer = common.Checkpointer(
             ckpt_dir=train_dir,
@@ -253,16 +256,15 @@ def train_eval(
 
         # Collect initial replay data.
         logger.info(
-            'Initializing replay buffer by collecting experience for %d steps with '
-            'a random policy.', initial_collect_steps)
-        dynamic_step_driver.DynamicStepDriver(
+            'Initializing replay buffer by collecting experience for %d episodes with '
+            'a random policy.', initial_collect_episodes)
+        dynamic_episode_driver.DynamicEpisodeDriver(
             tf_env,
             initial_collect_policy,
             observers=[replay_buffer.add_batch] + train_metrics,
-            num_steps=initial_collect_steps).run()
-        tf_env.reset()
+            num_episodes=initial_collect_episodes).run()
 
-        logger.info('Computing metrics in eval_tf_env')
+        logger.info('Computing initial eval_metrics and eval_policy')
         results = metric_utils.eager_compute(
             eval_metrics,
             eval_tf_env,
@@ -293,13 +295,15 @@ def train_eval(
 
         def train_step():
             experience, _ = next(iterator)
-            logger.info('Re-training agent')
-            return tf_agent.train(experience)
+            logger.info('Begin agent re-training')
+            exp = tf_agent.train(experience)
+            logger.info('Done! Agent re-trained')
+            return exp
 
         if use_tf_functions:
             train_step = common.function(train_step)
         
-        logger.info('Done with initial seed. Beginning training')
+        logger.info(f'Done with initial seed. Training for {num_iterations} iterations')
         #tf_env.reset()
         for _ in range(num_iterations):
             start_time = time.time()
@@ -336,13 +340,9 @@ def train_eval(
                 rb_checkpointer.save(global_step=global_step.numpy())
 
             if global_step.numpy() % eval_interval == 0:
-                tf_env.reset()
-                eval_tf_env.reset()
-
                 results = metric_utils.eager_compute(
                     eval_metrics,
                     eval_tf_env,
-                    #tf_env,
                     eval_policy,
                     num_episodes=num_eval_episodes,
                     train_step=global_step,
