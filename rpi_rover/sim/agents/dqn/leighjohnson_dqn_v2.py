@@ -84,7 +84,7 @@ register(id='train-donkey-generated-track-multidiscrete-v0', entry_point='gym_do
 )
 
 register(id='eval-donkey-generated-track-multidiscrete-v0', entry_point='gym_donkeycar.envs.donkey_env:MultiDiscreteGeneratedTrackEnv',
-    kwargs={'headless': False,  'thread_name': 'EvalSimThread', 'port': 9091}
+    kwargs={'headless': True,  'thread_name': 'EvalSimThread', 'port': 9091}
 )
 
 from gym_donkeycar import envs as gym_donkeycar_envs
@@ -110,9 +110,13 @@ def train_eval(
     output_fc_layer_params=(20,),
 
     # Params for collect
+    boltzmann_temperature=0.1,
+# Temperature value to use for Boltzmann sampling of
+#         the actions during data collection. The closer to 0.0, the higher the
+#         probability of choosing the best action.
     initial_collect_episodes=10,
     collect_episodes_per_iteration=10,
-    epsilon_greedy=0.1,
+    epsilon_greedy=None, # 0.1,
     replay_buffer_capacity=10000,
     # Params for target update
     target_update_tau=0.05,
@@ -129,7 +133,7 @@ def train_eval(
     use_tf_functions=True,
     # Params for eval
     num_eval_episodes=10,
-    eval_interval=10,
+    eval_interval=20,
     # Params for checkpoints
     train_checkpoint_interval=20,
     policy_checkpoint_interval=20,
@@ -202,8 +206,8 @@ def train_eval(
             gradient_clipping=gradient_clipping,
             debug_summaries=debug_summaries,
             summarize_grads_and_vars=summarize_grads_and_vars,
-            train_step_counter=global_step
-            
+            train_step_counter=global_step,
+            boltzmann_temperature=boltzmann_temperature
             )
         tf_agent.initialize()
         
@@ -310,6 +314,7 @@ def train_eval(
             time_step, policy_state = collect_driver.run(
                 time_step=time_step,
                 policy_state=policy_state,
+                num_episodes=initial_collect_episodes
             )
             for _ in range(train_steps_per_iteration):
                 train_loss = train_step()
@@ -340,6 +345,7 @@ def train_eval(
                 rb_checkpointer.save(global_step=global_step.numpy())
 
             if global_step.numpy() % eval_interval == 0:
+                logger.info('Computing eval_policy metrics')
                 results = metric_utils.eager_compute(
                     eval_metrics,
                     eval_tf_env,
