@@ -14,8 +14,8 @@ with open('HISTORY.rst') as history_file:
 PYTHON_VERSIONS = '>=3'
 
 requirements = [
-    'tf-nightly-2.0-preview; platform_system=="Darwin"',
-    'tf-nightly-gpu-2.0-preview; platform_system=="Linux"',
+    'tensorflow==2.0.0-rc0; platform_system=="Darwin"',
+    'tensorflow-gpu==2.0.0-rc0; platform_system=="Linux"',
     'tf-agents-nightly',
     'gym',
     'gym-donkeycar',
@@ -50,7 +50,10 @@ setup(
     keywords='rpi_rover',
     name='rpi_rover',
     packages=find_packages(include=['rpi_rover']),
-    dependency_links=['git+ssh://git@github.com/leigh-johnson/agents.git@multidiscrete-testing#egg=tf-agents-nightly-0.2.0.dev20190816'],
+    dependency_links=[
+        'git+ssh://git@github.com/leigh-johnson/agents.git@multidiscrete-testing#egg=tf-agents-nightly-0.2.0.dev20190816',
+        'git+ssh://git@github.com/leigh-johnson/gym-donkeycar.git@tf-agents-dqn#egg=gym-donkeycar-1.1.0',
+    ],
     setup_requires=setup_requirements,
     test_suite='tests',
     tests_require=test_requirements,
