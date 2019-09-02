@@ -84,7 +84,7 @@ register(id='train-donkey-generated-track-multidiscrete-v0', entry_point='gym_do
 )
 
 register(id='eval-donkey-generated-track-multidiscrete-v0', entry_point='gym_donkeycar.envs.donkey_env:MultiDiscreteGeneratedTrackEnv',
-    kwargs={'headless': True,  'thread_name': 'EvalSimThread', 'port': 9091}
+    kwargs={'headless': False,  'thread_name': 'EvalSimThread', 'port': 9091}
 )
 
 from gym_donkeycar import envs as gym_donkeycar_envs
@@ -110,17 +110,17 @@ def train_eval(
     output_fc_layer_params=(20,),
 
     # Params for collect
-    boltzmann_temperature=0.1,
+    boltzmann_temperature=None,
 # Temperature value to use for Boltzmann sampling of
 #         the actions during data collection. The closer to 0.0, the higher the
 #         probability of choosing the best action.
     initial_collect_episodes=10,
-    collect_episodes_per_iteration=10,
-    epsilon_greedy=None, # 0.1,
+    collect_episodes_per_iteration=1,
+    epsilon_greedy=0.1,
     replay_buffer_capacity=10000,
     # Params for target update
     target_update_tau=0.05,
-    target_update_period=5,
+    target_update_period=1,
 
     # Params for train
     train_steps_per_iteration=1,
@@ -201,6 +201,7 @@ def train_eval(
             optimizer=tf.compat.v1.train.AdamOptimizer(
                 learning_rate=learning_rate),
             td_errors_loss_fn=common.element_wise_squared_loss,
+            #td_errors_loss_fn=common.element_wise_huba_loss,
             gamma=gamma,
             reward_scale_factor=reward_scale_factor,
             gradient_clipping=gradient_clipping,
@@ -224,7 +225,9 @@ def train_eval(
         replay_buffer = tf_uniform_replay_buffer.TFUniformReplayBuffer(
             data_spec=tf_agent.collect_data_spec,
             batch_size=tf_env.batch_size,
-            max_length=replay_buffer_capacity)
+            max_length=replay_buffer_capacity,
+            
+            )
 
         collect_driver = dynamic_episode_driver.DynamicEpisodeDriver(
             tf_env,
@@ -299,25 +302,25 @@ def train_eval(
 
         def train_step():
             experience, _ = next(iterator)
-            logger.info('Begin agent re-training')
-            exp = tf_agent.train(experience)
-            logger.info('Done! Agent re-trained')
-            return exp
+            return tf_agent.train(experience)
 
         if use_tf_functions:
             train_step = common.function(train_step)
         
         logger.info(f'Done with initial seed. Training for {num_iterations} iterations')
-        #tf_env.reset()
         for _ in range(num_iterations):
             start_time = time.time()
+            tf_env.reset()
             time_step, policy_state = collect_driver.run(
                 time_step=time_step,
                 policy_state=policy_state,
-                num_episodes=initial_collect_episodes
+                num_episodes=collect_episodes_per_iteration
             )
-            for _ in range(train_steps_per_iteration):
-                train_loss = train_step()
+
+            train_loss = train_step()
+
+            #import pdb; pdb.set_trace()
+            #for _ in range(train_steps_per_iteration):
             time_acc += time.time() - start_time
 
             if global_step.numpy() % log_interval == 0:
@@ -346,6 +349,7 @@ def train_eval(
 
             if global_step.numpy() % eval_interval == 0:
                 logger.info('Computing eval_policy metrics')
+                eval_tf_env.reset()
                 results = metric_utils.eager_compute(
                     eval_metrics,
                     eval_tf_env,
