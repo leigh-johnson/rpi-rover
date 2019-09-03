@@ -101,7 +101,7 @@ def train_eval(
     root_dir,
     env_name='donkey-generated-track-multidiscrete-v0',
     num_iterations=100000,
-    train_sequence_length=1,
+    train_sequence_length=10,
     # Params for QNetwork
     fc_layer_params=(100,),
     # Params for QRnnNetwork
@@ -114,8 +114,8 @@ def train_eval(
 # Temperature value to use for Boltzmann sampling of
 #         the actions during data collection. The closer to 0.0, the higher the
 #         probability of choosing the best action.
-    initial_collect_episodes=10,
-    collect_episodes_per_iteration=1,
+    initial_collect_episodes=100,
+    collect_episodes_per_iteration=10,
     epsilon_greedy=0.1,
     replay_buffer_capacity=10000,
     # Params for target update
@@ -125,15 +125,15 @@ def train_eval(
     # Params for train
     train_steps_per_iteration=1,
     batch_size=64,
-    learning_rate=1e-3,
+    learning_rate=1e-4,
     n_step_update=1,
     gamma=0.99,
     reward_scale_factor=1.0,
     gradient_clipping=None,
     use_tf_functions=True,
     # Params for eval
-    num_eval_episodes=10,
-    eval_interval=20,
+    num_eval_episodes=100,
+    eval_interval=10,
     # Params for checkpoints
     train_checkpoint_interval=20,
     policy_checkpoint_interval=20,
@@ -183,11 +183,19 @@ def train_eval(
         ))
 
 
-        q_net = q_network.QNetwork(
-            tf_env.observation_spec(),
-            tf_env.action_spec(),
-            fc_layer_params=fc_layer_params)
-        train_sequence_length = n_step_update
+        if train_sequence_length > 1:
+            q_net = q_rnn_network.QRnnNetwork(
+                tf_env.observation_spec(),
+                tf_env.action_spec(),
+                input_fc_layer_params=input_fc_layer_params,
+                lstm_size=lstm_size,
+                output_fc_layer_params=output_fc_layer_params)
+        else:
+            q_net = q_network.QNetwork(
+                tf_env.observation_spec(),
+                tf_env.action_spec(),
+                fc_layer_params=fc_layer_params)
+            train_sequence_length = n_step_update
 
         # TODO(b/127301657): Decay epsilon based on global step, cf. cl/188907839
         tf_agent = dqn_agent.DqnAgent(
@@ -297,7 +305,8 @@ def train_eval(
         dataset = replay_buffer.as_dataset(
             num_parallel_calls=3,
             sample_batch_size=batch_size,
-            num_steps=train_sequence_length + 1).prefetch(3)
+            num_steps=train_sequence_length + 1
+        ).prefetch(3)
         iterator = iter(dataset)
 
         def train_step():
