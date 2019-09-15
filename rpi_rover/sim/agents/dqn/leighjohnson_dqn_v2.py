@@ -127,13 +127,13 @@ def train_eval(
     batch_size=64,
     learning_rate=1e-4,
     n_step_update=1,
-    gamma=0.99,
-    reward_scale_factor=1.0,
+    gamma=0.90,
+    reward_scale_factor=0.9,
     gradient_clipping=None,
     use_tf_functions=True,
     # Params for eval
     num_eval_episodes=100,
-    eval_interval=10,
+    eval_interval=20,
     # Params for checkpoints
     train_checkpoint_interval=20,
     policy_checkpoint_interval=20,
