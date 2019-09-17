@@ -101,43 +101,47 @@ def train_eval(
     root_dir,
     env_name='donkey-generated-track-multidiscrete-v0',
     num_iterations=100000,
-    train_sequence_length=10,
+    train_sequence_length=1,
     # Params for QNetwork
     fc_layer_params=(100,),
     # Params for QRnnNetwork
-    input_fc_layer_params=(50,),
+    input_fc_layer_params=(48,),
     lstm_size=(20,),
     output_fc_layer_params=(20,),
 
     # Params for collect
     boltzmann_temperature=None,
+    #epsilon_greedy=0.1,
+    epsilon_greedy=0.9,
+    epsilon_decay=0.9,
+    epsilon_decay_period=1,
+    min_epsilon=0.1,
 # Temperature value to use for Boltzmann sampling of
 #         the actions during data collection. The closer to 0.0, the higher the
 #         probability of choosing the best action.
-    initial_collect_episodes=100,
-    collect_episodes_per_iteration=10,
-    epsilon_greedy=0.1,
-    replay_buffer_capacity=10000,
+    initial_collect_episodes=10,
+    collect_episodes_per_iteration=1,
+    replay_buffer_capacity=40000,
     # Params for target update
     target_update_tau=0.05,
-    target_update_period=1,
+    target_update_period=5,
 
     # Params for train
     train_steps_per_iteration=1,
-    batch_size=64,
-    learning_rate=1e-4,
+    batch_size=128,
+    learning_rate=1e-5,
     n_step_update=1,
-    gamma=0.90,
-    reward_scale_factor=0.9,
+    gamma=0.99,
+    reward_scale_factor=1.0,
     gradient_clipping=None,
     use_tf_functions=True,
     # Params for eval
-    num_eval_episodes=100,
-    eval_interval=20,
+    num_eval_episodes=10,
+    eval_interval=200,
     # Params for checkpoints
-    train_checkpoint_interval=20,
-    policy_checkpoint_interval=20,
-    rb_checkpoint_interval=20,
+    train_checkpoint_interval=200,
+    policy_checkpoint_interval=200,
+    rb_checkpoint_interval=200,
     # Params for summaries and logging
     log_interval=1,
     summary_interval=1,
@@ -198,7 +202,7 @@ def train_eval(
             train_sequence_length = n_step_update
 
         # TODO(b/127301657): Decay epsilon based on global step, cf. cl/188907839
-        tf_agent = dqn_agent.DqnAgent(
+        tf_agent = dqn_agent.DdqnAgent(
             tf_env.time_step_spec(),
             tf_env.action_spec(),
             q_network=q_net,
@@ -259,6 +263,7 @@ def train_eval(
             replay_buffer=replay_buffer)
 
         train_checkpointer.initialize_or_restore()
+        policy_checkpointer.initialize_or_restore()
         rb_checkpointer.initialize_or_restore()
 
         if use_tf_functions:
@@ -278,8 +283,8 @@ def train_eval(
             initial_collect_policy,
             observers=[replay_buffer.add_batch] + train_metrics,
             num_episodes=initial_collect_episodes).run()
-
         logger.info('Computing initial eval_metrics and eval_policy')
+        
         results = metric_utils.eager_compute(
             eval_metrics,
             eval_tf_env,
@@ -290,7 +295,6 @@ def train_eval(
             summary_writer=eval_summary_writer,
             summary_prefix='Metrics',
         )
-        #eval_tf_env.reset()
 
         if eval_metrics_callback is not None:
             eval_metrics_callback(results, global_step.numpy())
@@ -325,12 +329,16 @@ def train_eval(
                 policy_state=policy_state,
                 num_episodes=collect_episodes_per_iteration
             )
+            #tf_env.reset()
 
             train_loss = train_step()
 
             #import pdb; pdb.set_trace()
             #for _ in range(train_steps_per_iteration):
             time_acc += time.time() - start_time
+
+            if global_step.numpy() % epsilon_decay_period == 0 and tf_agent._epsilon_greedy > min_epsilon:
+                tf_agent._epsilon_greedy *= epsilon_decay            
 
             if global_step.numpy() % log_interval == 0:
                 logger.info('step = %d, loss = %f', global_step.numpy(),
@@ -371,6 +379,8 @@ def train_eval(
                 if eval_metrics_callback is not None:
                     eval_metrics_callback(results, global_step.numpy())
                 metric_utils.log_metrics(eval_metrics)
+                #eval_tf_env.reset()
+
         return train_loss
 
 
