@@ -102,8 +102,13 @@ def train_eval(
     env_name='donkey-generated-track-multidiscrete-v0',
     num_iterations=100000,
     train_sequence_length=1,
+    
+    # Params for MultiDiscrete Gym Environment
+    steer_actions=16, # subdivide range of steer controls (-1.0, 1.0) in n bins
+    throttle_actions=3, # subdivide range of throttle controls into n bins
+
     # Params for QNetwork
-    fc_layer_params=(100,),
+    fc_layer_params=[200, 100],
     # Params for QRnnNetwork
     input_fc_layer_params=(48,),
     lstm_size=(20,),
@@ -119,25 +124,25 @@ def train_eval(
 # Temperature value to use for Boltzmann sampling of
 #         the actions during data collection. The closer to 0.0, the higher the
 #         probability of choosing the best action.
-    initial_collect_episodes=10,
+    initial_collect_episodes=1000,
     collect_episodes_per_iteration=1,
     replay_buffer_capacity=40000,
     # Params for target update
-    target_update_tau=0.05,
-    target_update_period=5,
+    target_update_tau=0.001,
+    target_update_period=1,
 
     # Params for train
     train_steps_per_iteration=1,
-    batch_size=128,
+    batch_size=512,
     learning_rate=1e-5,
     n_step_update=1,
     gamma=0.99,
-    reward_scale_factor=1.0,
+    reward_scale_factor=0.99,
     gradient_clipping=None,
     use_tf_functions=True,
     # Params for eval
     num_eval_episodes=10,
-    eval_interval=200,
+    eval_interval=100,
     # Params for checkpoints
     train_checkpoint_interval=200,
     policy_checkpoint_interval=200,
@@ -181,6 +186,7 @@ def train_eval(
         tf_env = tf_py_environment.TFPyEnvironment(suite_gym.load(f'train-{env_name}', max_episode_steps=max_episode_steps,
             env_wrappers=(MultiDiscreteToDiscreteWrapper,)
         ))
+        import pdb; pdb.set_trace()
         eval_tf_env = tf_py_environment.TFPyEnvironment(suite_gym.load(f'eval-{env_name}',
             max_episode_steps=max_episode_steps,
             env_wrappers=(MultiDiscreteToDiscreteWrapper,)
@@ -195,10 +201,12 @@ def train_eval(
                 lstm_size=lstm_size,
                 output_fc_layer_params=output_fc_layer_params)
         else:
+            spec = tf_env.action_spec()
+            output_neurons = tf.convert_to_tensor(spec.maximum, dtype=spec.dtype).numpy()
             q_net = q_network.QNetwork(
                 tf_env.observation_spec(),
                 tf_env.action_spec(),
-                fc_layer_params=fc_layer_params)
+                fc_layer_params=fc_layer_params + output_neurons)
             train_sequence_length = n_step_update
 
         # TODO(b/127301657): Decay epsilon based on global step, cf. cl/188907839
@@ -329,13 +337,13 @@ def train_eval(
                 policy_state=policy_state,
                 num_episodes=collect_episodes_per_iteration
             )
-            #tf_env.reset()
 
             train_loss = train_step()
 
             #import pdb; pdb.set_trace()
             #for _ in range(train_steps_per_iteration):
             time_acc += time.time() - start_time
+            #tf_env.reset()
 
             if global_step.numpy() % epsilon_decay_period == 0 and tf_agent._epsilon_greedy > min_epsilon:
                 tf_agent._epsilon_greedy *= epsilon_decay            
@@ -379,7 +387,7 @@ def train_eval(
                 if eval_metrics_callback is not None:
                     eval_metrics_callback(results, global_step.numpy())
                 metric_utils.log_metrics(eval_metrics)
-                #eval_tf_env.reset()
+                eval_tf_env.reset()
 
         return train_loss
 
