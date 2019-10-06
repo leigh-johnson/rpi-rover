@@ -108,7 +108,7 @@ def train_eval(
     throttle_actions=3, # subdivide range of throttle controls into n bins
 
     # Params for QNetwork
-    fc_layer_params=[200, 100],
+    #fc_layer_params=[200, 100],
     # Params for QRnnNetwork
     input_fc_layer_params=(48,),
     lstm_size=(20,),
@@ -116,27 +116,28 @@ def train_eval(
 
     # Params for collect
     boltzmann_temperature=None,
-    #epsilon_greedy=0.1,
-    epsilon_greedy=0.9,
-    epsilon_decay=0.9,
+    epsilon_greedy=0.99,
+    #epsilon_greedy=1,
+    epsilon_decay=0.9996,
     epsilon_decay_period=1,
-    min_epsilon=0.1,
+    min_epsilon=0.01,
 # Temperature value to use for Boltzmann sampling of
 #         the actions during data collection. The closer to 0.0, the higher the
 #         probability of choosing the best action.
-    initial_collect_episodes=1000,
+    initial_collect_episodes=100,
     collect_episodes_per_iteration=1,
     replay_buffer_capacity=40000,
     # Params for target update
-    target_update_tau=0.001,
-    target_update_period=1,
+    target_update_tau=0.05,
+    target_update_period=10,
 
     # Params for train
+    td_errors_loss_fn=common.element_wise_huber_loss,
     train_steps_per_iteration=1,
-    batch_size=512,
+    batch_size=256,
     learning_rate=1e-5,
     n_step_update=1,
-    gamma=0.99,
+    gamma=0.95,
     reward_scale_factor=0.99,
     gradient_clipping=None,
     use_tf_functions=True,
@@ -144,9 +145,9 @@ def train_eval(
     num_eval_episodes=10,
     eval_interval=100,
     # Params for checkpoints
-    train_checkpoint_interval=200,
-    policy_checkpoint_interval=200,
-    rb_checkpoint_interval=200,
+    train_checkpoint_interval=100,
+    policy_checkpoint_interval=100,
+    rb_checkpoint_interval=100,
     # Params for summaries and logging
     log_interval=1,
     summary_interval=1,
@@ -154,6 +155,9 @@ def train_eval(
     debug_summaries=True,
     summarize_grads_and_vars=True,
         eval_metrics_callback=None,
+
+    # max number of checkpointers to keep
+    max_to_keep=10,
      # donkey gym env
     sim=DONKEY_SIM_PATH,
     max_episode_steps=100000
@@ -180,13 +184,14 @@ def train_eval(
         tf_metrics.AverageEpisodeLengthMetric(buffer_size=num_eval_episodes)
     ]
 
+    epsilon_greedy=tf.Variable(epsilon_greedy, dtype=tf.float32)
+
     global_step = tf.compat.v1.train.get_or_create_global_step()
     with tf.compat.v2.summary.record_if(
             lambda: tf.math.equal(global_step % summary_interval, 0)):
         tf_env = tf_py_environment.TFPyEnvironment(suite_gym.load(f'train-{env_name}', max_episode_steps=max_episode_steps,
             env_wrappers=(MultiDiscreteToDiscreteWrapper,)
         ))
-        import pdb; pdb.set_trace()
         eval_tf_env = tf_py_environment.TFPyEnvironment(suite_gym.load(f'eval-{env_name}',
             max_episode_steps=max_episode_steps,
             env_wrappers=(MultiDiscreteToDiscreteWrapper,)
@@ -206,7 +211,7 @@ def train_eval(
             q_net = q_network.QNetwork(
                 tf_env.observation_spec(),
                 tf_env.action_spec(),
-                fc_layer_params=fc_layer_params + output_neurons)
+                fc_layer_params=(output_neurons,))
             train_sequence_length = n_step_update
 
         # TODO(b/127301657): Decay epsilon based on global step, cf. cl/188907839
@@ -220,7 +225,7 @@ def train_eval(
             target_update_period=target_update_period,
             optimizer=tf.compat.v1.train.AdamOptimizer(
                 learning_rate=learning_rate),
-            td_errors_loss_fn=common.element_wise_squared_loss,
+            td_errors_loss_fn=td_errors_loss_fn,
             #td_errors_loss_fn=common.element_wise_huba_loss,
             gamma=gamma,
             reward_scale_factor=reward_scale_factor,
@@ -260,11 +265,14 @@ def train_eval(
             ckpt_dir=train_dir,
             agent=tf_agent,
             global_step=global_step,
-            metrics=metric_utils.MetricsGroup(train_metrics, 'train_metrics'))
+            epsilon_greedy=epsilon_greedy,
+            metrics=metric_utils.MetricsGroup(train_metrics, 'train_metrics'),
+            max_to_keep=max_to_keep)
         policy_checkpointer = common.Checkpointer(
             ckpt_dir=os.path.join(train_dir, 'policy'),
             policy=eval_policy,
-            global_step=global_step)
+            global_step=global_step,
+            max_to_keep=max_to_keep)
         rb_checkpointer = common.Checkpointer(
             ckpt_dir=os.path.join(train_dir, 'replay_buffer'),
             max_to_keep=1,
@@ -273,6 +281,9 @@ def train_eval(
         train_checkpointer.initialize_or_restore()
         policy_checkpointer.initialize_or_restore()
         rb_checkpointer.initialize_or_restore()
+
+        # restore tf_agent epsilon_gredy from tf variable
+        tf_agent._epsilon_greedy = epsilon_greedy
 
         if use_tf_functions:
             # To speed up collect use common.function.
@@ -321,6 +332,13 @@ def train_eval(
         ).prefetch(3)
         iterator = iter(dataset)
 
+        @tf.function
+        def decay_epsilon(global_step_val, epsilon_greedy, epsilon_decay_period=epsilon_decay_period, min_epsilon=min_epsilon):
+            if global_step_val % epsilon_decay_period == 0 and epsilon_greedy > min_epsilon:
+                epsilon_greedy = epsilon_greedy * epsilon_decay
+                #epsilon_greedy.assign(epsilon_greedy * epsilon_decay)
+            return epsilon_greedy
+
         def train_step():
             experience, _ = next(iterator)
             return tf_agent.train(experience)
@@ -343,10 +361,11 @@ def train_eval(
             #import pdb; pdb.set_trace()
             #for _ in range(train_steps_per_iteration):
             time_acc += time.time() - start_time
-            #tf_env.reset()
-
-            if global_step.numpy() % epsilon_decay_period == 0 and tf_agent._epsilon_greedy > min_epsilon:
-                tf_agent._epsilon_greedy *= epsilon_decay            
+            tf.compat.v2.summary.scalar(
+                    name='epsilon', data=epsilon_greedy, step=global_step)            
+            epsilon_greedy = decay_epsilon(global_step, epsilon_greedy)
+            tf_agent._epsilon_greedy = epsilon_greedy          
+            tf_env.reset()
 
             if global_step.numpy() % log_interval == 0:
                 logger.info('step = %d, loss = %f', global_step.numpy(),
@@ -388,7 +407,6 @@ def train_eval(
                     eval_metrics_callback(results, global_step.numpy())
                 metric_utils.log_metrics(eval_metrics)
                 eval_tf_env.reset()
-
         return train_loss
 
 
